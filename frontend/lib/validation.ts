@@ -301,8 +301,8 @@ export function validateRequired(value: string, fieldName: string): string | nul
   return null;
 }
 
-// Amount validation
-export function validateAmount(amount: string): string | null {
+// Amount validation for payments (minimum KSh 100)
+export function validateAmount(amount: string, minAmount: number = 100): string | null {
   if (!amount || amount.trim() === '') {
     return 'Amount is required';
   }
@@ -310,8 +310,8 @@ export function validateAmount(amount: string): string | null {
   if (isNaN(numAmount) || numAmount <= 0) {
     return 'Please enter a valid amount';
   }
-  if (numAmount < 10) {
-    return 'Minimum amount is KSh 10';
+  if (numAmount < minAmount) {
+    return `Minimum amount is KSh ${minAmount.toLocaleString()}`;
   }
   return null;
 }

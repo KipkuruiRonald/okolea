@@ -21,6 +21,7 @@ class LoanStatus(str, enum.Enum):
     PENDING = "PENDING"
     ACTIVE = "ACTIVE"
     SETTLED = "SETTLED"
+    REJECTED = "REJECTED"
     DEFAULTED = "DEFAULTED"
 
 
@@ -87,6 +88,14 @@ class User(Base):
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
     
+    # ============================================================
+    # KYC VERIFICATION FIELDS
+    # ============================================================
+    kyc_status = Column(String(20), default="PENDING")  # PENDING, SUBMITTED, VERIFIED, REJECTED
+    kyc_verified_at = Column(DateTime(timezone=True), nullable=True)
+    kyc_verified_by = Column(Integer, ForeignKey("users.id"), nullable=True)
+    kyc_rejection_reason = Column(Text, nullable=True)
+    
     # Relationships
     loans = relationship("Loan", back_populates="borrower", foreign_keys="Loan.borrower_id")
     payments = relationship("Transaction", back_populates="borrower", foreign_keys="Transaction.borrower_id")
@@ -106,6 +115,9 @@ class Loan(Base):
     principal = Column(Float, nullable=False)  # Loan amount in KSh (500-15000)
     interest_rate = Column(Float, default=0.04)  # Annual rate = 4%
     term_days = Column(Integer, default=9)  # Fixed 9-day term
+    
+    # Phone number for payment verification
+    phone_number = Column(String(20), nullable=True)  # Borrower's registered phone
     
     # Fee structure
     processing_fee = Column(Float, default=0.0)  # Flat processing fee
@@ -198,6 +210,9 @@ class AuditLog(Base):
     # Changes
     old_value = Column(Text, nullable=True)
     new_value = Column(Text, nullable=True)
+    
+    # Detailed information (for rejection reasons, etc.)
+    details = Column(Text, nullable=True)
     
     # Context
     ip_address = Column(String(50), nullable=True)
@@ -320,8 +335,9 @@ class UserProfile(Base):
     address = Column(Text, nullable=True)
     
     # KYC Status
-    kyc_status = Column(String(20), default="PENDING")  # PENDING, VERIFIED, REJECTED
+    kyc_status = Column(String(20), default="PENDING")  # PENDING, SUBMITTED, VERIFIED, REJECTED
     kyc_verified_at = Column(DateTime(timezone=True), nullable=True)
+    kyc_rejection_reason = Column(Text, nullable=True)
     
     # Payment Methods
     mpesa_phone = Column(String(20), nullable=True)

@@ -1,0 +1,8 @@
+{
+  "venvPath": "C:\\Users\\Admin\\AppData\\Local\\Programs\\Python",
+  "venv": "Python311",
+  "pythonVersion": "3.11",
+  "extraPaths": [
+    "C:\\Users\\Admin\\AppData\\Local\\Programs\\Python\\Python311\\Lib\\site-packages"
+  ]
+}

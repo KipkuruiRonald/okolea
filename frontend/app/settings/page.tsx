@@ -4,7 +4,7 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import { motion } from 'framer-motion';
 import { 
   User, Bell, Shield, Wallet, Moon, Sun, Mail, Phone, MapPin, Save, 
-  Loader2, CheckCircle, CreditCard, Lock, Eye, EyeOff, Globe, AlertCircle, X, Download, Trash2
+  Loader2, CheckCircle, CreditCard, Lock, Eye, EyeOff, Globe, AlertCircle, X, Download, Trash2, Clock, XCircle
 } from 'lucide-react';
 import GlassCard from '@/components/GlassCard';
 import AccordionSection from '@/components/AccordionSection';
@@ -15,6 +15,36 @@ import { useTheme } from '../providers';
 import { settingsApi } from '@/lib/api';
 import { validateProfile, validatePasswordChange, ValidationResult } from '@/lib/validation';
 import { getErrorMessage } from '@/lib/utils';
+
+// Utility function to mask phone number
+const maskPhone = (phone: string): string => {
+  if (!phone) return '';
+  // Remove any spaces or dashes
+  const cleaned = phone.replace(/[\s-]/g, '');
+  if (cleaned.length < 4) return cleaned;
+  // Show first 4 digits and last 3 digits, mask the middle
+  return cleaned.slice(0, 4) + '***' + cleaned.slice(-3);
+};
+
+// Utility function to mask National ID
+const maskNationalId = (id: string): string => {
+  if (!id) return '';
+  if (id.length < 4) return id;
+  // Show first 4 digits, mask the rest
+  return id.slice(0, 4) + '****';
+};
+
+// Utility function to format date for HTML5 date input (YYYY-MM-DD)
+const formatDateForInput = (dateString: string | null | undefined): string => {
+  if (!dateString) return '';
+  try {
+    const date = new Date(dateString);
+    if (isNaN(date.getTime())) return '';
+    return date.toISOString().split('T')[0];
+  } catch {
+    return '';
+  }
+};
 
 type TabType = 'profile' | 'security' | 'notifications' | 'payment' | 'preferences' | 'privacy';
 
@@ -39,6 +69,15 @@ function SettingsContent() {
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
   const firstErrorRef = useRef<HTMLInputElement>(null);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+  const [kycStatus, setKycStatus] = useState<string>('PENDING');
+  const [submitting, setSubmitting] = useState(false);
+  const [loadingKyc, setLoadingKyc] = useState(true);
+
+  // Determine if fields should be editable based on KYC status
+  // Fields are EDITABLE when kyc_status === 'PENDING' or 'REJECTED'
+  // Fields are LOCKED when kyc_status === 'SUBMITTED' or 'VERIFIED'
+  const isEditable = kycStatus === 'PENDING' || kycStatus === 'REJECTED';
+  const isFieldsLocked = !isEditable;
   
   // Track unsaved changes
   const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
@@ -105,7 +144,61 @@ function SettingsContent() {
   // Load initial data
   useEffect(() => {
     loadUserData();
+    fetchKycStatus();
   }, []);
+
+  const fetchKycStatus = async () => {
+    try {
+      const token = localStorage.getItem('access_token');
+      const res = await fetch('http://localhost:8000/api/settings/kyc-status', {
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      
+      if (res.ok) {
+        const data = await res.json();
+        setKycStatus(data.kyc_status || 'PENDING');
+      }
+    } catch (err) {
+      console.error('Failed to fetch KYC status:', err);
+    } finally {
+      setLoadingKyc(false);
+    }
+  };
+
+  const handleSubmitForVerification = async () => {
+    console.log('Submitting KYC with status:', kycStatus);
+    console.log('User data being submitted:', userData);
+    
+    setSubmitting(true);
+    try {
+      const token = localStorage.getItem('access_token');
+      const res = await fetch('http://localhost:8000/api/settings/kyc-submit', {
+        method: 'POST',
+        headers: { 
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        }
+      });
+      
+      console.log('KYC Submit Response status:', res.status);
+      
+      if (res.ok) {
+        const data = await res.json();
+        console.log('KYC Submit Success:', data);
+        setKycStatus('SUBMITTED');
+        alert('Profile submitted for verification! You will be notified once verified.');
+      } else {
+        const errorText = await res.text();
+        console.error('KYC Submit Error response:', errorText);
+        alert(`Failed to submit: ${errorText}`);
+      }
+    } catch (err) {
+      console.error('KYC Submit exception:', err);
+      alert('Failed to submit for verification. Please try again.');
+    } finally {
+      setSubmitting(false);
+    }
+  };
 
   const loadUserData = async () => {
     setLoading(true);
@@ -309,6 +402,97 @@ function SettingsContent() {
         </p>
       </motion.div>
 
+      {/* KYC Status Banner */}
+      {!loadingKyc && (
+        <>
+          {kycStatus === 'PENDING' && (
+            <div className="bg-yellow-50 border border-yellow-200 rounded-xl p-6 mb-6">
+              <div className="flex items-start gap-4">
+                <div className="p-2 bg-yellow-100 rounded-lg">
+                  <Shield className="w-6 h-6 text-yellow-600" />
+                </div>
+                <div className="flex-1">
+                  <h3 className="font-semibold text-yellow-800 text-lg">Complete Your Profile Verification</h3>
+                  <p className="text-yellow-700 mt-1">
+                    Please review your information below. Once you submit, an admin will verify your account.
+                  </p>
+                  <div className="mt-4">
+                    <button
+                      onClick={handleSubmitForVerification}
+                      disabled={submitting}
+                      className="px-6 py-2 bg-yellow-600 text-white rounded-lg hover:bg-yellow-700 disabled:opacity-50 flex items-center gap-2"
+                    >
+                      {submitting ? (
+                        <>
+                          <Loader2 className="w-4 h-4 animate-spin" />
+                          Submitting...
+                        </>
+                      ) : (
+                        'Submit for Verification'
+                      )}
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {kycStatus === 'SUBMITTED' && (
+            <div className="bg-blue-50 border border-blue-200 rounded-xl p-6 mb-6">
+              <div className="flex items-center gap-4">
+                <div className="p-2 bg-blue-100 rounded-lg">
+                  <Clock className="w-6 h-6 text-blue-600" />
+                </div>
+                <div>
+                  <h3 className="font-semibold text-blue-800">Verification Pending</h3>
+                  <p className="text-blue-600 mt-1">
+                    Your profile has been submitted for verification. An admin will review your information shortly.
+                  </p>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {kycStatus === 'VERIFIED' && (
+            <div className="bg-green-50 border border-green-200 rounded-xl p-6 mb-6">
+              <div className="flex items-center gap-4">
+                <div className="p-2 bg-green-100 rounded-lg">
+                  <CheckCircle className="w-6 h-6 text-green-600" />
+                </div>
+                <div>
+                  <h3 className="font-semibold text-green-800">Profile Verified</h3>
+                  <p className="text-green-600 mt-1">
+                    Your account has been verified. Thank you for completing the verification process.
+                  </p>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {kycStatus === 'REJECTED' && (
+            <div className="bg-red-50 border border-red-200 rounded-xl p-6 mb-6">
+              <div className="flex items-start gap-4">
+                <div className="p-2 bg-red-100 rounded-lg">
+                  <XCircle className="w-6 h-6 text-red-600" />
+                </div>
+                <div className="flex-1">
+                  <h3 className="font-semibold text-red-800">Verification Rejected</h3>
+                  <p className="text-red-600 mt-1">
+                    Your profile verification was rejected. Please contact support for more information.
+                  </p>
+                  <button
+                    onClick={handleSubmitForVerification}
+                    className="mt-3 px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700"
+                  >
+                    Resubmit for Verification
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+        </>
+      )}
+
       {/* Error Message */}
       {error && (
         <div className="flex items-center gap-2 p-4 rounded-xl bg-tan/20 border border-tan">
@@ -412,63 +596,62 @@ function SettingsContent() {
                     <div className="space-y-4">
                       <div>
                         <label className="block text-sm font-medium text-nearblack dark:text-cream mb-2">
+                          <Lock className="inline h-4 w-4 mr-1" />
                           Full Name
+                          <span className="ml-2 text-xs text-nearblack/50">(Read-only - verified at registration)</span>
                         </label>
                         <input
                           name="full_name"
-                          value={userData.full_name}
-                          onChange={(e) => {
-                            handleInputChange('full_name', e.target.value);
-                            if (fieldErrors.full_name) {
-                              setFieldErrors(prev => ({ ...prev, full_name: '' }));
-                            }
-                          }}
-                          className={`w-full rounded-xl bg-beige px-4 py-3 text-nearblack placeholder-nearblack/40 outline-none border ${
-                            fieldErrors.full_name ? 'border-red-500' : 'border-warmgray focus:border-darkgray'
+                          value={userData.full_name || ''}
+                          readOnly={isFieldsLocked}
+                          onChange={(e) => !isFieldsLocked && setUserData({...userData, full_name: e.target.value})}
+                          className={`w-full rounded-xl px-4 py-3 outline-none ${
+                            isFieldsLocked 
+                              ? 'bg-tan text-nearblack/60 cursor-not-allowed' 
+                              : 'bg-cream text-nearblack focus:ring-2 focus:ring-blue-500'
                           }`}
                         />
-                        {fieldErrors.full_name && (
-                          <p className="mt-1 text-xs text-red-500">{fieldErrors.full_name}</p>
-                        )}
                       </div>
 
                       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                         <div>
                           <label className="block text-sm font-medium text-nearblack dark:text-cream mb-2">
-                            <Mail className="inline h-4 w-4 mr-1" />
+                            <Lock className="inline h-4 w-4 mr-1" />
                             Email Address
+                            <span className="ml-2 text-xs text-nearblack/50">(Used for login)</span>
                           </label>
                           <input
                             type="email"
-                            value={userData.email}
-                            readOnly
-                            className="w-full rounded-xl bg-tan px-4 py-3 text-nearblack/60 outline-none cursor-not-allowed"
+                            value={userData.email || ''}
+                            readOnly={isFieldsLocked}
+                            onChange={(e) => !isFieldsLocked && setUserData({...userData, email: e.target.value})}
+                            className={`w-full rounded-xl px-4 py-3 outline-none ${
+                              isFieldsLocked 
+                                ? 'bg-tan text-nearblack/60 cursor-not-allowed' 
+                                : 'bg-cream text-nearblack focus:ring-2 focus:ring-blue-500'
+                            }`}
                           />
                         </div>
 
                         <div>
                           <label className="block text-sm font-medium text-nearblack dark:text-cream mb-2">
-                            <Phone className="inline h-4 w-4 mr-1" />
+                            <Lock className="inline h-4 w-4 mr-1" />
                             Phone Number
+                            <span className="ml-2 text-xs text-nearblack/50">(Verified at registration)</span>
                           </label>
                           <input
                             type="tel"
                             name="phone"
-                            value={userData.phone || ''}
-                            onChange={(e) => {
-                              handleInputChange('phone', e.target.value);
-                              if (fieldErrors.phone) {
-                                setFieldErrors(prev => ({ ...prev, phone: '' }));
-                              }
-                            }}
-                            placeholder="+254712345678"
-                            className={`w-full rounded-xl bg-beige px-4 py-3 text-nearblack placeholder-nearblack/40 outline-none border ${
-                              fieldErrors.phone ? 'border-red-500' : 'border-warmgray focus:border-darkgray'
+                            value={isFieldsLocked ? maskPhone(userData.phone || '') : userData.phone}
+                            readOnly={isFieldsLocked}
+                            onChange={(e) => !isFieldsLocked && setUserData({...userData, phone: e.target.value})}
+                            placeholder={isFieldsLocked ? "" : "+2547XXXXXXXX"}
+                            className={`w-full rounded-xl px-4 py-3 outline-none ${
+                              isFieldsLocked 
+                                ? 'bg-tan text-nearblack/60 cursor-not-allowed' 
+                                : 'bg-cream text-nearblack focus:ring-2 focus:ring-blue-500'
                             }`}
                           />
-                          {fieldErrors.phone && (
-                            <p className="mt-1 text-xs text-red-500">{fieldErrors.phone}</p>
-                          )}
                         </div>
                       </div>
                     </div>
@@ -483,37 +666,41 @@ function SettingsContent() {
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                       <div>
                         <label className="block text-sm font-medium text-nearblack dark:text-cream mb-2">
+                          <Lock className="inline h-4 w-4 mr-1" />
                           National ID
+                          <span className="ml-2 text-xs text-nearblack/50">(Legal requirement)</span>
                         </label>
                         <input
                           type="text"
                           name="national_id"
-                          value={userData.national_id || ''}
-                          onChange={(e) => {
-                            handleInputChange('national_id', e.target.value);
-                            if (fieldErrors.national_id) {
-                              setFieldErrors(prev => ({ ...prev, national_id: '' }));
-                            }
-                          }}
-                          placeholder="12345678"
-                          className={`w-full rounded-xl bg-beige px-4 py-3 text-nearblack placeholder-nearblack/40 outline-none border ${
-                            fieldErrors.national_id ? 'border-red-500' : 'border-warmgray focus:border-darkgray'
+                          value={isFieldsLocked ? maskNationalId(userData.national_id || '') : userData.national_id}
+                          readOnly={isFieldsLocked}
+                          onChange={(e) => !isFieldsLocked && setUserData({...userData, national_id: e.target.value})}
+                          placeholder={isFieldsLocked ? "" : "1234****"}
+                          className={`w-full rounded-xl px-4 py-3 outline-none font-mono ${
+                            isFieldsLocked 
+                              ? 'bg-tan text-nearblack/60 cursor-not-allowed' 
+                              : 'bg-cream text-nearblack focus:ring-2 focus:ring-blue-500'
                           }`}
                         />
-                        {fieldErrors.national_id && (
-                          <p className="mt-1 text-xs text-red-500">{fieldErrors.national_id}</p>
-                        )}
                       </div>
 
                       <div>
                         <label className="block text-sm font-medium text-nearblack dark:text-cream mb-2">
+                          <Lock className="inline h-4 w-4 mr-1" />
                           Date of Birth
+                          <span className="ml-2 text-xs text-nearblack/50">(Verified at registration)</span>
                         </label>
                         <input
                           type="date"
-                          value={userData.date_of_birth || ''}
-                          onChange={(e) => handleInputChange('date_of_birth', e.target.value)}
-                          className="w-full rounded-xl bg-beige px-4 py-3 text-nearblack outline-none border border-warmgray focus:border-darkgray"
+                          value={formatDateForInput(userData.date_of_birth)}
+                          readOnly={isFieldsLocked}
+                          onChange={(e) => !isFieldsLocked && setUserData({...userData, date_of_birth: e.target.value})}
+                          className={`w-full rounded-xl px-4 py-3 outline-none ${
+                            isFieldsLocked 
+                              ? 'bg-tan text-nearblack/60 cursor-not-allowed' 
+                              : 'bg-cream text-nearblack focus:ring-2 focus:ring-blue-500'
+                          }`}
                         />
                       </div>
                     </div>

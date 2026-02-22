@@ -165,3 +165,35 @@ export function getErrorMessage(error: unknown, fallback: string = 'An error occ
     return fallback;
   }
 }
+
+/**
+ * Mask a phone number to show only first 4 and last 3 digits
+ * @param phone - Full phone number string
+ * @returns Masked phone number (e.g., 0799***014)
+ */
+export const maskPhoneNumber = (phone: string | null | undefined): string => {
+  if (!phone) return 'N/A';
+  
+  // Remove any non-digit characters
+  const cleanPhone = phone.replace(/\D/g, '');
+  
+  if (cleanPhone.length < 7) {
+    // If phone is too short, mask partially
+    return cleanPhone.slice(0, 4) + '*'.repeat(Math.max(0, cleanPhone.length - 4));
+  }
+  
+  // Show first 4 and last 3 digits
+  const firstFour = cleanPhone.slice(0, 4);
+  const lastThree = cleanPhone.slice(-3);
+  const masked = '*'.repeat(cleanPhone.length - 7);
+  
+  return `${firstFour}${masked}${lastThree}`;
+};
+
+/**
+ * Mask phone for display with consistent formatting
+ */
+export const formatMaskedPhone = (phone: string | null | undefined): string => {
+  const masked = maskPhoneNumber(phone);
+  return masked === 'N/A' ? masked : `📱 ${masked}`;
+};

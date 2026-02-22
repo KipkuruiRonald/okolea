@@ -110,6 +110,43 @@ class UserResponse(UserBase):
         from_attributes = True
 
 
+class AdminUserResponse(BaseModel):
+    """Admin user response schema with all user fields"""
+    id: int
+    email: str
+    username: str
+    full_name: str
+    phone: Optional[str] = None
+    national_id: Optional[str] = None
+    date_of_birth: Optional[datetime] = None
+    location: Optional[str] = None
+    role: str
+    is_active: bool
+    is_verified: bool = False
+    
+    # Login tracking
+    last_login: Optional[datetime] = None
+    last_login_ip: Optional[str] = None
+    login_count: int = 0
+    
+    # Credit fields
+    credit_tier: int = 1
+    credit_score: int = 150
+    perfect_repayment_streak: int = 0
+    current_limit: float = 500.0
+    max_limit_achieved: float = 500.0
+    borrowing_blocked: bool = False
+    
+    # KYC status
+    kyc_status: str = "PENDING"
+    
+    created_at: datetime
+    updated_at: Optional[datetime] = None
+    
+    class Config:
+        from_attributes = True
+
+
 # ============================================================================
 # AUTH SCHEMAS
 # ============================================================================
@@ -181,6 +218,9 @@ class LoanResponse(BaseModel):
     perfect_repayment: bool = False
     late_penalty_amount: float = 0.0
     
+    # Outstanding balance - calculated from transactions
+    outstanding_balance: Optional[float] = None
+    
     # Status
     status: LoanStatus
     created_at: datetime
@@ -207,6 +247,8 @@ class LoanListItem(BaseModel):
     late_days: int = 0
     interest_amount: float = 0.0
     processing_fee: float = 0.0
+    outstanding_balance: Optional[float] = None  # Calculated from transactions
+    phone_number: Optional[str] = None  # Phone number for repayment
     
     class Config:
         from_attributes = True
@@ -288,14 +330,16 @@ class TransactionBase(BaseModel):
 
 
 class TransactionCreate(TransactionBase):
-    borrower_id: int
+    borrower_id: Optional[int] = None  # Optional - derived from authenticated user
     loan_id: int
+    phone_number: str = Field(..., description="Confirmed phone number for verification")
 
 
 class TransactionInitiate(BaseModel):
     """Schema for initiating a payment"""
     loan_id: int
     amount: float = Field(..., gt=0)
+    phone_number: str = Field(..., description="Confirmed phone number for verification")
 
 
 class TransactionResponse(TransactionBase):

@@ -30,6 +30,7 @@ import {
   validateLoanPurpose,
   validateTermsAccepted 
 } from '@/lib/validation';
+import { maskPhoneNumber } from '@/lib/utils';
 
 const loanOptions = [
   { amount: 500, term: '9 days', interest: '4.9%', totalDue: 'KSh 525', eligible: true },
@@ -76,6 +77,7 @@ function ApplyPageContent() {
   const [step, setStep] = useState(1);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isApproved, setIsApproved] = useState(false);
+  const [submittedLoan, setSubmittedLoan] = useState<any>(null);
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
   const [formError, setFormError] = useState<string | null>(null);
   
@@ -104,6 +106,36 @@ function ApplyPageContent() {
       setIsLoadingProfile(false);
     }
   }, [user]);
+
+  // KYC Status Check - users must be verified to apply for loans
+  const [kycStatus, setKycStatus] = useState<string | null>(null);
+  const [isCheckingKyc, setIsCheckingKyc] = useState(true);
+
+  useEffect(() => {
+    const checkKycStatus = async () => {
+      try {
+        const token = localStorage.getItem('access_token');
+        const res = await fetch('http://localhost:8000/api/settings/kyc-status', {
+          headers: { 
+            'Authorization': `Bearer ${token}`,
+            'Content-Type': 'application/json'
+          }
+        });
+        if (res.ok) {
+          const data = await res.json();
+          setKycStatus(data.kyc_status);
+        }
+      } catch (err) {
+        console.error('Failed to check KYC status:', err);
+        // If we can't check, assume not verified for safety
+        setKycStatus('PENDING');
+      } finally {
+        setIsCheckingKyc(false);
+      }
+    };
+    
+    checkKycStatus();
+  }, []);
 
   const [formData, setFormData] = useState({
     fullName: '',
@@ -211,6 +243,9 @@ function ApplyPageContent() {
       
       // Store loan details in session for success page
       sessionStorage.setItem('lastLoan', JSON.stringify(result));
+      
+      // Store submitted loan details for success screen
+      setSubmittedLoan(result);
       
       // Show success
       setIsApproved(true);
@@ -347,12 +382,27 @@ function ApplyPageContent() {
                   {selectedLoan?.totalDue}
                 </span>
               </div>
-              <div className="flex justify-between items-center py-3">
+              <div className="flex justify-between items-center py-3 border-b border-gray-200 dark:border-gray-700">
                 <span className="text-gray-600 dark:text-gray-400">Due Date</span>
                 <span className="font-bold text-gray-900 dark:text-white">
                   {new Date(Date.now() + (selectedLoan?.term.includes('9') ? 9 : selectedLoan?.term.includes('15') ? 15 : 30) * 24 * 60 * 60 * 1000).toLocaleDateString('en-KE')}
                 </span>
               </div>
+              {/* Phone number for repayment - show after loan approval */}
+              {submittedLoan?.phone && (
+                <div className="mt-4 p-3 rounded-lg bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800">
+                  <p className="text-sm font-medium text-blue-600 dark:text-blue-400">
+                    <CreditCard className="h-4 w-4 inline mr-1" />
+                    Registered Phone for Repayment
+                  </p>
+                  <p className="text-lg font-mono font-bold text-blue-700 dark:text-blue-300 mt-1">
+                    {maskPhoneNumber(submittedLoan.phone)}
+                  </p>
+                  <p className="text-xs text-blue-500 dark:text-blue-400 mt-1">
+                    Use this phone number when making repayments
+                  </p>
+                </div>
+              )}
             </div>
           </GlassCard>
 
@@ -383,6 +433,43 @@ function ApplyPageContent() {
 
   return (
     <div className="space-y-8">
+      {/* KYC Verification Required Message */}
+      {!isCheckingKyc && kycStatus !== 'VERIFIED' && (
+        <GlassCard>
+          <div className="text-center py-8">
+            <Shield className="h-16 w-16 text-yellow-500 mx-auto mb-4" />
+            <h2 className="text-2xl font-bold text-gray-900 dark:text-white mb-2">
+              KYC Verification Required
+            </h2>
+            <p className="text-gray-600 dark:text-gray-400 mb-6">
+              {kycStatus === 'REJECTED' 
+                ? 'Your KYC verification was rejected. Please contact support for assistance.'
+                : kycStatus === 'PENDING' || kycStatus === 'SUBMITTED'
+                ? 'Your KYC verification is still being processed. Please wait for verification to complete before applying for loans.'
+                : 'You must complete KYC verification before applying for loans.'
+              }
+            </p>
+            <Link 
+              href="/settings" 
+              className="inline-flex items-center px-6 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
+            >
+              Go to Settings
+              <ArrowRight className="ml-2 h-4 w-4" />
+            </Link>
+          </div>
+        </GlassCard>
+      )}
+
+      {/* Show loading while checking KYC */}
+      {isCheckingKyc && (
+        <div className="flex justify-center py-8">
+          <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
+        </div>
+      )}
+
+      {/* Main form content - only show if KYC is verified or still checking */}
+      {!isCheckingKyc && kycStatus === 'VERIFIED' && (
+        <>
       {/* Header */}
       <motion.div
         initial={{ opacity: 0, y: 20 }}
@@ -988,6 +1075,7 @@ function ApplyPageContent() {
           </motion.button>
         )}
       </div>
+      </>)}
     </div>
   );
 }

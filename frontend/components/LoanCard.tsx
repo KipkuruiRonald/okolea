@@ -111,7 +111,7 @@ export default function LoanCard({ loanId, amount, interestRate, term, type, del
 
         {/* Action Button */}
         <motion.a
-          href="/my-loans"
+          href="/myloans"
           whileHover={{ scale: 1.02 }}
           whileTap={{ scale: 0.98 }}
           className="mt-4 w-full rounded-xl py-2 text-xs font-medium shadow-lg transition-all duration-300 hover:shadow-xl block text-center"

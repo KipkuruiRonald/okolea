@@ -52,6 +52,8 @@ async def get_user_profile(
             "location": profile.location,
             "address": profile.address,
             "kyc_status": profile.kyc_status,
+            "kyc_verified_at": profile.kyc_verified_at.isoformat() if profile.kyc_verified_at else None,
+            "kyc_rejection_reason": profile.kyc_rejection_reason,
             "mpesa_phone": profile.mpesa_phone,
             "mpesa_verified": profile.mpesa_verified,
             "preferred_loan_amount": profile.preferred_loan_amount,
@@ -84,6 +86,13 @@ async def update_user_profile(
     if not profile:
         profile = UserProfile(user_id=current_user.id)
         db.add(profile)
+    
+    # Check if KYC is verified - if so, restrict updates
+    if profile.kyc_status == "VERIFIED":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Profile is locked. Please contact support to update verified information."
+        )
     
     # Update profile fields
     if "full_name" in profile_data:
@@ -686,4 +695,72 @@ async def get_credit_score_trend(
         "change": change,
         "change_percent": round(change_percent, 1),
         "trend": "up" if change > 0 else "down" if change < 0 else "neutral"
+    }
+
+
+# ============================================================================
+# KYC VERIFICATION ENDPOINTS
+# ============================================================================
+
+@router.get("/kyc-status")
+async def get_kyc_status(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """Get user KYC verification status"""
+    profile = db.query(UserProfile).filter(UserProfile.user_id == current_user.id).first()
+    
+    if not profile:
+        profile = UserProfile(user_id=current_user.id, kyc_status="PENDING")
+        db.add(profile)
+        db.commit()
+        db.refresh(profile)
+    
+    return {
+        "kyc_status": profile.kyc_status,
+        "kyc_verified_at": profile.kyc_verified_at.isoformat() if profile.kyc_verified_at else None,
+        "kyc_rejection_reason": profile.kyc_rejection_reason,
+    }
+
+
+@router.post("/kyc-submit")
+async def submit_for_kyc_verification(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """Submit profile for KYC verification"""
+    profile = db.query(UserProfile).filter(UserProfile.user_id == current_user.id).first()
+    
+    if not profile:
+        profile = UserProfile(user_id=current_user.id)
+        db.add(profile)
+    
+    # Check if already verified
+    if profile.kyc_status == "VERIFIED":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Account is already verified"
+        )
+    
+    # Validate required fields before submission
+    required_fields = ["phone", "national_id", "date_of_birth", "location", "address"]
+    missing_fields = []
+    for field in required_fields:
+        if not getattr(profile, field):
+            missing_fields.append(field)
+    
+    if missing_fields:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Please complete all required fields before submission. Missing: {', '.join(missing_fields)}"
+        )
+    
+    # Update status to submitted
+    profile.kyc_status = "SUBMITTED"
+    db.commit()
+    db.refresh(profile)
+    
+    return {
+        "message": "Profile submitted for verification. You will be notified once your account is verified.",
+        "kyc_status": profile.kyc_status
     }

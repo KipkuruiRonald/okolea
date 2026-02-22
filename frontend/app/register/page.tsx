@@ -263,7 +263,7 @@ export default function RegisterPage() {
                   value={formData.full_name}
                   onChange={handleChange}
                   required
-                  placeholder="John Doe"
+                  placeholder="Okoleo User"
                   className="w-full pl-12 pr-4 py-3 rounded-xl bg-white/50 dark:bg-gray-700/50 border border-gray-200 dark:border-gray-600 focus:border-blue-500 dark:focus:border-blue-400 focus:ring-2 focus:ring-blue-500/20 dark:focus:ring-blue-400/20 outline-none transition-all duration-300 text-gray-900 dark:text-gray-100 placeholder-gray-400"
                 />
               </div>
@@ -282,7 +282,7 @@ export default function RegisterPage() {
                   value={formData.email}
                   onChange={handleChange}
                   required
-                  placeholder="john@example.com"
+                  placeholder="okoleo@example.com"
                   className="w-full pl-12 pr-4 py-3 rounded-xl bg-white/50 dark:bg-gray-700/50 border border-gray-200 dark:border-gray-600 focus:border-blue-500 dark:focus:border-blue-400 focus:ring-2 focus:ring-blue-500/20 dark:focus:ring-blue-400/20 outline-none transition-all duration-300 text-gray-900 dark:text-gray-100 placeholder-gray-400"
                 />
               </div>
@@ -302,7 +302,7 @@ export default function RegisterPage() {
                   onChange={handleChange}
                   required
                   minLength={3}
-                  placeholder="johndoe"
+                  placeholder="okoleouser"
                   className="w-full pl-12 pr-4 py-3 rounded-xl bg-white/50 dark:bg-gray-700/50 border border-gray-200 dark:border-gray-600 focus:border-blue-500 dark:focus:border-blue-400 focus:ring-2 focus:ring-blue-500/20 dark:focus:ring-blue-400/20 outline-none transition-all duration-300 text-gray-900 dark:text-gray-100 placeholder-gray-400"
                 />
               </div>

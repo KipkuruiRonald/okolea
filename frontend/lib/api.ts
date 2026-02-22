@@ -157,8 +157,22 @@ export const loansApi = {
 // Transactions API
 export const transactionsApi = {
   initiate: async (data: any) => {
-    const response = await api.post('/api/transactions', data)
-    return response.data
+    console.log('[PAYMENT DEBUG] Initiating payment with data:', JSON.stringify(data, null, 2));
+    try {
+      const response = await api.post('/api/transactions', data);
+      console.log('[PAYMENT DEBUG] Payment successful:', response.data);
+      return response.data;
+    } catch (error: any) {
+      // Log detailed error information
+      console.error('[PAYMENT DEBUG] Payment failed with error:');
+      console.error('[PAYMENT DEBUG] Error response status:', error.response?.status);
+      console.error('[PAYMENT DEBUG] Error response data:', error.response?.data);
+      console.error('[PAYMENT DEBUG] Error response detail:', error.response?.data?.detail);
+      console.error('[PAYMENT DEBUG] Full error object:', error);
+      
+      // Re-throw the error so the caller can handle it
+      throw error;
+    }
   },
   
   getAll: async (skip = 0, limit = 100) => {

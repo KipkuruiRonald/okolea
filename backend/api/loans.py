@@ -11,12 +11,13 @@ import logging
 logger = logging.getLogger(__name__)
 
 from core.database import get_db
-from models.models import User, UserRole, Loan, AuditLog
+from models.models import User, UserRole, Loan, AuditLog, UserProfile
 from schemas.schemas import (
     LoanCreate, LoanResponse, LoanDetailResponse, LoanBulkUpload,
     LoanUpdate, LoanListItem, LoanListResponse
 )
 from api.auth import get_current_user
+from api.transactions import calculate_outstanding_balance
 
 router = APIRouter()
 
@@ -80,7 +81,24 @@ async def apply_for_loan(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    """Save loan application to database - auto-approves for demo"""
+    """Save loan application to database - requires KYC verification"""
+    
+    # Check KYC status from UserProfile - only VERIFIED users can apply for loans
+    profile = db.query(UserProfile).filter(UserProfile.user_id == current_user.id).first()
+    
+    # Determine KYC status: prefer UserProfile, fallback to User model
+    kyc_status = profile.kyc_status if profile else current_user.kyc_status
+    
+    if not kyc_status or kyc_status != "VERIFIED":
+        kyc_message = "KYC verification required before applying for loans."
+        if kyc_status == "REJECTED":
+            kyc_message = "Your KYC verification was rejected. Please contact support for assistance."
+        elif kyc_status == "PENDING" or kyc_status == "SUBMITTED":
+            kyc_message = "Your KYC verification is still being processed. Please wait for verification to complete before applying for loans."
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=kyc_message
+        )
     
     # Log incoming data for debugging
     print(f"[LOAN APPLY] Received application: {application.dict()}")
@@ -106,6 +124,7 @@ async def apply_for_loan(
         loan = Loan(
             loan_id=loan_id,
             borrower_id=current_user.id,
+            phone_number=current_user.phone,  # Store borrower's registered phone
             principal=application.amount,
             interest_rate=interest_rate,
             term_days=application.term_days,
@@ -152,7 +171,8 @@ async def apply_for_loan(
         "amount": loan.principal,
         "total_due": loan.total_due,
         "due_date": loan.due_date.isoformat() if loan.due_date else None,
-        "id": loan.id
+        "id": loan.id,
+        "phone": loan.phone_number  # Return phone for display
     }
 
 
@@ -201,26 +221,35 @@ async def get_my_loans_v2(
         Loan.borrower_id == current_user.id
     ).order_by(Loan.created_at.desc()).offset(skip).limit(limit).all()
     
-    # Convert to Pydantic models
-    return [
-        LoanListItem(
-            id=loan.id,
-            loan_id=loan.loan_id,
-            principal=loan.principal,
-            total_due=loan.total_due,
-            interest_rate=loan.interest_rate,
-            term_days=loan.term_days,
-            status=loan.status.value if loan.status else "UNKNOWN",
-            due_date=loan.due_date.isoformat() if loan.due_date else None,
-            created_at=loan.created_at.isoformat() if loan.created_at else None,
-            payment_date=loan.payment_date.isoformat() if loan.payment_date else None,
-            perfect_repayment=loan.perfect_repayment,
-            late_days=loan.late_days,
-            interest_amount=loan.interest_amount,
-            processing_fee=loan.processing_fee
+    # Import the calculation function
+    from api.transactions import calculate_outstanding_balance
+    
+    # Convert to Pydantic models with calculated outstanding_balance
+    result = []
+    for loan in loans:
+        outstanding = calculate_outstanding_balance(db, loan)
+        result.append(
+            LoanListItem(
+                id=loan.id,
+                loan_id=loan.loan_id,
+                principal=loan.principal,
+                total_due=loan.total_due,
+                interest_rate=loan.interest_rate,
+                term_days=loan.term_days,
+                status=loan.status.value if loan.status else "UNKNOWN",
+                due_date=loan.due_date.isoformat() if loan.due_date else None,
+                created_at=loan.created_at.isoformat() if loan.created_at else None,
+                payment_date=loan.payment_date.isoformat() if loan.payment_date else None,
+                perfect_repayment=loan.perfect_repayment,
+                late_days=loan.late_days,
+                interest_amount=loan.interest_amount,
+                processing_fee=loan.processing_fee,
+                outstanding_balance=outstanding,
+                phone_number=loan.phone_number
+            )
         )
-        for loan in loans
-    ]
+    
+    return result
 
 
 @router.get("/recent", response_model=LoanListResponse)
@@ -242,26 +271,33 @@ async def get_recent_loans(
             Loan.borrower_id == current_user.id
         ).order_by(Loan.created_at.desc()).offset(skip).limit(limit).all()
     
+    # Import the calculation function
+    from api.transactions import calculate_outstanding_balance
+    
     # Convert to Pydantic models
-    items = [
-        LoanListItem(
-            id=loan.id,
-            loan_id=loan.loan_id,
-            principal=loan.principal,
-            total_due=loan.total_due,
-            interest_rate=loan.interest_rate,
-            term_days=loan.term_days,
-            status=loan.status.value if loan.status else "UNKNOWN",
-            due_date=loan.due_date.isoformat() if loan.due_date else None,
-            created_at=loan.created_at.isoformat() if loan.created_at else None,
-            payment_date=loan.payment_date.isoformat() if loan.payment_date else None,
-            perfect_repayment=loan.perfect_repayment,
-            late_days=loan.late_days,
-            interest_amount=loan.interest_amount,
-            processing_fee=loan.processing_fee
+    items = []
+    for loan in loans:
+        outstanding = calculate_outstanding_balance(db, loan)
+        items.append(
+            LoanListItem(
+                id=loan.id,
+                loan_id=loan.loan_id,
+                principal=loan.principal,
+                total_due=loan.total_due,
+                interest_rate=loan.interest_rate,
+                term_days=loan.term_days,
+                status=loan.status.value if loan.status else "UNKNOWN",
+                due_date=loan.due_date.isoformat() if loan.due_date else None,
+                created_at=loan.created_at.isoformat() if loan.created_at else None,
+                payment_date=loan.payment_date.isoformat() if loan.payment_date else None,
+                perfect_repayment=loan.perfect_repayment,
+                late_days=loan.late_days,
+                interest_amount=loan.interest_amount,
+                processing_fee=loan.processing_fee,
+                outstanding_balance=outstanding,
+                phone_number=loan.phone_number
+            )
         )
-        for loan in loans
-    ]
     
     return LoanListResponse(
         items=items,
@@ -367,6 +403,10 @@ async def get_my_loans(
         # Regular users see their own loans
         loans = loan_service.get_loans_by_borrower(db, current_user.id, skip, limit)
     
+    # Calculate outstanding balance for each loan
+    for loan in loans:
+        loan.outstanding_balance = calculate_outstanding_balance(db, loan)
+    
     return loans
 
 
@@ -390,6 +430,10 @@ async def get_my_loans_no_slash(
     else:
         # Regular users see their own loans
         loans = loan_service.get_loans_by_borrower(db, current_user.id, skip, limit)
+    
+    # Calculate outstanding balance for each loan
+    for loan in loans:
+        loan.outstanding_balance = calculate_outstanding_balance(db, loan)
     
     return loans
 
@@ -421,6 +465,9 @@ async def get_loan(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Access denied"
         )
+    
+    # Calculate outstanding balance
+    loan.outstanding_balance = calculate_outstanding_balance(db, loan)
     
     return loan
 

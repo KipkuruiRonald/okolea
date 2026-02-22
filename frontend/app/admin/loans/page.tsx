@@ -5,7 +5,6 @@ import { motion, AnimatePresence } from 'framer-motion';
 import AdminLayout from '@/components/AdminLayout';
 import { 
   Search, 
-  Filter, 
   Eye, 
   AlertTriangle, 
   CheckCircle,
@@ -15,27 +14,34 @@ import {
   Calendar,
   TrendingUp,
   Send,
-  FileText,
-  User
+  User,
+  ChevronLeft,
+  ChevronRight
 } from 'lucide-react';
 
 interface Loan {
   id: number;
   loan_id: string;
+  borrower_id: number;
   borrower_name: string;
-  borrower_id?: number;
+  borrower_email?: string;
+  borrower_phone?: string;
   principal: number;
-  current_outstanding: number;
-  monthly_emi: number;
-  emis_paid: number;
-  emis_missed: number;
-  risk_grade?: string;
-  status: string;
-  due_date?: string;
-  created_at?: string;
+  interest_rate: number;
+  term_days: number;
+  total_due: number;
+  outstanding_balance: number;
+  phone_number: string;
+  status: 'PENDING' | 'ACTIVE' | 'SETTLED' | 'REJECTED' | 'DEFAULTED';
+  due_date: string;
+  created_at: string;
+  updated_at?: string;
+  payment_date?: string;
+  late_days: number;
+  perfect_repayment?: boolean;
 }
 
-type TabType = 'all' | 'active' | 'at_risk' | 'overdue' | 'defaulted';
+type TabType = 'all' | 'pending' | 'active' | 'settled' | 'defaulted';
 
 export default function LoanMonitoringPage() {
   const [loans, setLoans] = useState<Loan[]>([]);
@@ -46,6 +52,8 @@ export default function LoanMonitoringPage() {
   const [selectedLoan, setSelectedLoan] = useState<Loan | null>(null);
   const [processing, setProcessing] = useState(false);
   const [sendingReminder, setSendingReminder] = useState<number | null>(null);
+  const [currentPage, setCurrentPage] = useState(1);
+  const itemsPerPage = 20;
 
   // Fetch loans from API
   useEffect(() => {
@@ -57,8 +65,10 @@ export default function LoanMonitoringPage() {
         });
         if (res.ok) {
           const data = await res.json();
-          setLoans(data);
-          setFilteredLoans(data);
+          // Handle both array and paginated responses
+          const loansData = Array.isArray(data) ? data : data.items || [];
+          setLoans(loansData);
+          setFilteredLoans(loansData);
         }
       } catch (err) {
         console.error('Failed to fetch loans:', err);
@@ -76,27 +86,29 @@ export default function LoanMonitoringPage() {
 
     // Filter by tab
     if (activeTab !== 'all') {
-      filtered = filtered.filter(loan => {
-        switch (activeTab) {
-          case 'active': return loan.status === 'ACTIVE';
-          case 'at_risk': return loan.emis_missed >= 1 && loan.emis_missed <= 2;
-          case 'overdue': return loan.emis_missed > 2;
-          case 'defaulted': return loan.status === 'DEFAULTED';
-          default: return true;
-        }
-      });
+      filtered = filtered.filter(loan => loan.status === activeTab.toUpperCase());
     }
 
     // Filter by search
     if (searchQuery) {
+      const query = searchQuery.toLowerCase();
       filtered = filtered.filter(loan =>
-        loan.borrower_name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        loan.loan_id?.toLowerCase().includes(searchQuery.toLowerCase())
+        loan.borrower_name.toLowerCase().includes(query) ||
+        loan.loan_id?.toLowerCase().includes(query) ||
+        loan.borrower_phone?.includes(query)
       );
     }
 
     setFilteredLoans(filtered);
+    setCurrentPage(1); // Reset to first page on filter change
   }, [activeTab, searchQuery, loans]);
+
+  // Pagination
+  const totalPages = Math.ceil(filteredLoans.length / itemsPerPage);
+  const paginatedLoans = filteredLoans.slice(
+    (currentPage - 1) * itemsPerPage,
+    currentPage * itemsPerPage
+  );
 
   // Handle mark as default
   const handleMarkDefault = async (loanId: number) => {
@@ -129,7 +141,6 @@ export default function LoanMonitoringPage() {
         method: 'POST',
         headers: { 'Authorization': `Bearer ${token}` },
       });
-      // Show success
       alert('Reminder sent successfully!');
     } catch (err) {
       console.error('Failed to send reminder:', err);
@@ -139,25 +150,68 @@ export default function LoanMonitoringPage() {
     }
   };
 
-  const getStatusColor = (loan: Loan) => {
-    if (loan.status === 'DEFAULTED') return '#3E3D39';
-    if (loan.emis_missed > 2) return '#3E3D39';
-    if (loan.emis_missed >= 1) return '#CABAA1';
-    return '#6D7464';
+  const getStatusColor = (loan: Loan): string => {
+    switch (loan.status) {
+      case 'DEFAULTED':
+        return '#3E3D39';
+      case 'REJECTED':
+        return '#3E3D39';
+      case 'ACTIVE':
+        return loan.late_days > 0 ? '#CABAA1' : '#6D7464';
+      case 'PENDING':
+        return '#CABAA1';
+      case 'SETTLED':
+        return '#6D7464';
+      default:
+        return '#6D7464';
+    }
   };
 
-  const getStatusLabel = (loan: Loan) => {
+  const getStatusLabel = (loan: Loan): string => {
+    if (loan.status === 'ACTIVE' && loan.late_days > 0) {
+      return `Late (${loan.late_days} day${loan.late_days > 1 ? 's' : ''})`;
+    }
+    if (loan.status === 'PENDING') return 'Pending';
+    if (loan.status === 'ACTIVE') return 'Active';
+    if (loan.status === 'SETTLED') return 'Settled';
     if (loan.status === 'DEFAULTED') return 'Defaulted';
-    if (loan.emis_missed > 2) return 'Overdue';
-    if (loan.emis_missed >= 1) return 'At Risk';
-    return 'Active';
+    if (loan.status === 'REJECTED') return 'Rejected';
+    return loan.status;
   };
+
+  // Calculate real stats from loan data
+  const totalPrincipal = loans.reduce((sum, loan) => sum + loan.principal, 0);
+  const totalOutstanding = loans.reduce((sum, loan) => sum + (loan.outstanding_balance || 0), 0);
+  const activeLateCount = loans.filter(l => l.status === 'ACTIVE' && l.late_days > 0).length;
+
+  const stats = [
+    { 
+      label: 'Total Disbursed', 
+      value: `KSh ${(totalPrincipal / 1000000).toFixed(1)}M`, 
+      icon: DollarSign 
+    },
+    { 
+      label: 'Outstanding', 
+      value: `KSh ${(totalOutstanding / 1000000).toFixed(1)}M`, 
+      icon: TrendingUp 
+    },
+    { 
+      label: 'Active Loans', 
+      value: loans.filter(l => l.status === 'ACTIVE').length.toString(), 
+      icon: CheckCircle 
+    },
+    { 
+      label: 'Late Payments', 
+      value: activeLateCount.toString(), 
+      icon: AlertTriangle 
+    },
+  ];
 
   const tabs: { id: TabType; label: string; count: number }[] = [
     { id: 'all', label: 'All Loans', count: loans.length },
+    { id: 'pending', label: 'Pending', count: loans.filter(l => l.status === 'PENDING').length },
     { id: 'active', label: 'Active', count: loans.filter(l => l.status === 'ACTIVE').length },
-    { id: 'at_risk', label: 'At Risk', count: loans.filter(l => l.emis_missed >= 1 && l.emis_missed <= 2).length },
-    { id: 'overdue', label: 'Overdue', count: loans.filter(l => l.emis_missed > 2).length },
+    { id: 'settled', label: 'Settled', count: loans.filter(l => l.status === 'SETTLED').length },
     { id: 'defaulted', label: 'Defaulted', count: loans.filter(l => l.status === 'DEFAULTED').length },
   ];
 
@@ -196,12 +250,7 @@ export default function LoanMonitoringPage() {
 
         {/* Stats Summary */}
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
-          {[
-            { label: 'Total Disbursed', value: `KSh ${(loans.reduce((a, l) => a + l.principal, 0) / 1000000).toFixed(1)}M`, icon: DollarSign },
-            { label: 'Outstanding', value: `KSh ${(loans.reduce((a, l) => a + l.current_outstanding, 0) / 1000000).toFixed(1)}M`, icon: TrendingUp },
-            { label: 'EMIs Collected', value: loans.reduce((a, l) => a + l.emis_paid, 0).toString(), icon: CheckCircle },
-            { label: 'EMIs Overdue', value: loans.reduce((a, l) => a + l.emis_missed, 0).toString(), icon: AlertTriangle },
-          ].map((stat, index) => (
+          {stats.map((stat, index) => (
             <motion.div
               key={stat.label}
               initial={{ opacity: 0, y: 20 }}
@@ -245,7 +294,7 @@ export default function LoanMonitoringPage() {
           <Search className="w-5 h-5" style={{ color: '#6D7464' }} />
           <input
             type="text"
-            placeholder="Search by name or loan ID..."
+            placeholder="Search by name, loan ID, or phone..."
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
             className="flex-1 bg-transparent outline-none text-sm"
@@ -265,21 +314,21 @@ export default function LoanMonitoringPage() {
                   <th className="text-left p-4 text-sm font-medium" style={{ color: '#050505' }}>Borrower</th>
                   <th className="text-left p-4 text-sm font-medium" style={{ color: '#050505' }}>Principal</th>
                   <th className="text-left p-4 text-sm font-medium" style={{ color: '#050505' }}>Outstanding</th>
-                  <th className="text-left p-4 text-sm font-medium" style={{ color: '#050505' }}>EMI Paid</th>
-                  <th className="text-left p-4 text-sm font-medium" style={{ color: '#050505' }}>Missed</th>
+                  <th className="text-left p-4 text-sm font-medium" style={{ color: '#050505' }}>Due Date</th>
+                  <th className="text-left p-4 text-sm font-medium" style={{ color: '#050505' }}>Late Days</th>
                   <th className="text-left p-4 text-sm font-medium" style={{ color: '#050505' }}>Status</th>
                   <th className="text-right p-4 text-sm font-medium" style={{ color: '#050505' }}>Actions</th>
                 </tr>
               </thead>
               <tbody>
-                {filteredLoans.length === 0 ? (
+                {paginatedLoans.length === 0 ? (
                   <tr>
                     <td colSpan={7} className="p-8 text-center" style={{ color: '#6D7464' }}>
                       No loans found
                     </td>
                   </tr>
                 ) : (
-                  filteredLoans.map((loan) => (
+                  paginatedLoans.map((loan) => (
                     <motion.tr
                       key={loan.id}
                       initial={{ opacity: 0 }}
@@ -312,17 +361,17 @@ export default function LoanMonitoringPage() {
                       </td>
                       <td className="p-4">
                         <p className="text-sm font-medium" style={{ color: '#050505' }}>
-                          KSh {loan.current_outstanding?.toLocaleString()}
+                          KSh {loan.outstanding_balance?.toLocaleString()}
                         </p>
                       </td>
                       <td className="p-4">
                         <p className="text-sm" style={{ color: '#050505' }}>
-                          {loan.emis_paid || 0}
+                          {loan.due_date ? new Date(loan.due_date).toLocaleDateString() : '-'}
                         </p>
                       </td>
                       <td className="p-4">
-                        <p className="text-sm font-medium" style={{ color: loan.emis_missed > 0 ? '#3E3D39' : '#050505' }}>
-                          {loan.emis_missed || 0}
+                        <p className="text-sm font-medium" style={{ color: loan.late_days > 0 ? '#3E3D39' : '#050505' }}>
+                          {loan.late_days || 0}
                         </p>
                       </td>
                       <td className="p-4">
@@ -365,6 +414,54 @@ export default function LoanMonitoringPage() {
             </table>
           </div>
         </div>
+
+        {/* Pagination */}
+        {totalPages > 1 && (
+          <div className="flex items-center justify-between">
+            <p className="text-sm" style={{ color: '#6D7464' }}>
+              Showing {(currentPage - 1) * itemsPerPage + 1} to {Math.min(currentPage * itemsPerPage, filteredLoans.length)} of {filteredLoans.length} loans
+            </p>
+            <div className="flex gap-2">
+              <button
+                onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
+                disabled={currentPage === 1}
+                className="p-2 rounded-lg transition-colors"
+                style={{ 
+                  backgroundColor: currentPage === 1 ? '#C4A995' : '#D5BFA4',
+                  color: currentPage === 1 ? '#6D7464' : '#050505',
+                  cursor: currentPage === 1 ? 'not-allowed' : 'pointer'
+                }}
+              >
+                <ChevronLeft className="w-5 h-5" />
+              </button>
+              {Array.from({ length: totalPages }, (_, i) => i + 1).map(page => (
+                <button
+                  key={page}
+                  onClick={() => setCurrentPage(page)}
+                  className="w-10 h-10 rounded-lg text-sm font-medium transition-colors"
+                  style={{ 
+                    backgroundColor: currentPage === page ? '#3E3D39' : '#D5BFA4',
+                    color: currentPage === page ? '#D4C8B5' : '#050505'
+                  }}
+                >
+                  {page}
+                </button>
+              ))}
+              <button
+                onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
+                disabled={currentPage === totalPages}
+                className="p-2 rounded-lg transition-colors"
+                style={{ 
+                  backgroundColor: currentPage === totalPages ? '#C4A995' : '#D5BFA4',
+                  color: currentPage === totalPages ? '#6D7464' : '#050505',
+                  cursor: currentPage === totalPages ? 'not-allowed' : 'pointer'
+                }}
+              >
+                <ChevronRight className="w-5 h-5" />
+              </button>
+            </div>
+          </div>
+        )}
 
         {/* Detail Modal */}
         <AnimatePresence>
@@ -446,41 +543,64 @@ export default function LoanMonitoringPage() {
                         <span className="text-xs font-medium" style={{ color: '#6D7464' }}>Outstanding</span>
                       </div>
                       <p className="text-lg font-bold" style={{ color: '#050505' }}>
-                        KSh {selectedLoan.current_outstanding?.toLocaleString()}
+                        KSh {selectedLoan.outstanding_balance?.toLocaleString()}
                       </p>
                     </div>
                     <div className="p-4 rounded-xl" style={{ backgroundColor: '#C4A995' }}>
                       <div className="flex items-center gap-2 mb-2">
                         <Calendar className="w-4 h-4" style={{ color: '#3E3D39' }} />
-                        <span className="text-xs font-medium" style={{ color: '#6D7464' }}>Monthly EMI</span>
+                        <span className="text-xs font-medium" style={{ color: '#6D7464' }}>Interest Rate</span>
                       </div>
                       <p className="text-lg font-bold" style={{ color: '#050505' }}>
-                        KSh {selectedLoan.monthly_emi?.toLocaleString()}
+                        {selectedLoan.interest_rate}%
                       </p>
                     </div>
                     <div className="p-4 rounded-xl" style={{ backgroundColor: '#C4A995' }}>
                       <div className="flex items-center gap-2 mb-2">
-                        <CheckCircle className="w-4 h-4" style={{ color: '#3E3D39' }} />
-                        <span className="text-xs font-medium" style={{ color: '#6D7464' }}>EMIs Paid</span>
+                        <Calendar className="w-4 h-4" style={{ color: '#3E3D39' }} />
+                        <span className="text-xs font-medium" style={{ color: '#6D7464' }}>Term Days</span>
                       </div>
                       <p className="text-lg font-bold" style={{ color: '#050505' }}>
-                        {selectedLoan.emis_paid || 0}
+                        {selectedLoan.term_days} days
+                      </p>
+                    </div>
+                    <div className="p-4 rounded-xl" style={{ backgroundColor: '#C4A995' }}>
+                      <div className="flex items-center gap-2 mb-2">
+                        <Calendar className="w-4 h-4" style={{ color: '#3E3D39' }} />
+                        <span className="text-xs font-medium" style={{ color: '#6D7464' }}>Due Date</span>
+                      </div>
+                      <p className="text-lg font-bold" style={{ color: '#050505' }}>
+                        {selectedLoan.due_date ? new Date(selectedLoan.due_date).toLocaleDateString() : '-'}
+                      </p>
+                    </div>
+                    <div className="p-4 rounded-xl" style={{ backgroundColor: '#C4A995' }}>
+                      <div className="flex items-center gap-2 mb-2">
+                        <AlertTriangle className="w-4 h-4" style={{ color: '#3E3D39' }} />
+                        <span className="text-xs font-medium" style={{ color: '#6D7464' }}>Late Days</span>
+                      </div>
+                      <p className="text-lg font-bold" style={{ color: selectedLoan.late_days > 0 ? '#3E3D39' : '#6D7464' }}>
+                        {selectedLoan.late_days || 0}
                       </p>
                     </div>
                   </div>
 
-                  {/* Missed Payments */}
+                  {/* Phone Number */}
                   <div className="p-4 rounded-xl" style={{ backgroundColor: '#C4A995' }}>
-                    <div className="flex items-center justify-between">
-                      <div>
-                        <p className="text-sm font-medium" style={{ color: '#050505' }}>
-                          Missed Payments
-                        </p>
-                        <p className="text-2xl font-bold" style={{ color: selectedLoan.emis_missed > 0 ? '#3E3D39' : '#6D7464' }}>
-                          {selectedLoan.emis_missed || 0}
-                        </p>
-                      </div>
-                      {selectedLoan.status !== 'DEFAULTED' && selectedLoan.emis_missed > 0 && (
+                    <p className="text-sm font-medium" style={{ color: '#050505' }}>Phone Number</p>
+                    <p className="text-lg" style={{ color: '#6D7464' }}>
+                      {selectedLoan.phone_number || selectedLoan.borrower_phone || '-'}
+                    </p>
+                  </div>
+
+                  {/* Late Days Action */}
+                  {selectedLoan.status === 'ACTIVE' && selectedLoan.late_days > 0 && (
+                    <div className="p-4 rounded-xl" style={{ backgroundColor: '#C4A995' }}>
+                      <div className="flex items-center justify-between">
+                        <div>
+                          <p className="text-sm font-medium" style={{ color: '#050505' }}>
+                            This loan is {selectedLoan.late_days} day{selectedLoan.late_days > 1 ? 's' : ''} overdue
+                          </p>
+                        </div>
                         <button
                           onClick={() => handleMarkDefault(selectedLoan.id)}
                           disabled={processing}
@@ -489,9 +609,9 @@ export default function LoanMonitoringPage() {
                         >
                           {processing ? 'Processing...' : 'Mark Default'}
                         </button>
-                      )}
+                      </div>
                     </div>
-                  </div>
+                  )}
                 </div>
 
                 {/* Action Buttons */}

@@ -25,6 +25,7 @@ import {
   validateAmount,
   validateLoanId 
 } from '@/lib/validation';
+import { maskPhoneNumber } from '@/lib/utils';
 
 type PaymentMethod = 'mpesa' | 'card';
 
@@ -41,6 +42,7 @@ interface PaymentResponse {
 
 interface RepaymentFormData {
   loanId: string;
+  confirmedPhone: string;
   amount: string;
   paymentMethod: PaymentMethod;
   phoneNumber: string;
@@ -66,9 +68,11 @@ export default function RepayPage() {
   const [paymentResponse, setPaymentResponse] = useState<PaymentResponse | null>(null);
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
   const [formError, setFormError] = useState<string | null>(null);
+  const [justPaid, setJustPaid] = useState(false);
   
   const [formData, setFormData] = useState<RepaymentFormData>({
     loanId: '',
+    confirmedPhone: '',
     amount: '',
     paymentMethod: 'mpesa',
     phoneNumber: '',
@@ -79,6 +83,9 @@ export default function RepayPage() {
 
   const [loans, setLoans] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
+  const [paymentHistory, setPaymentHistory] = useState<any[]>([]);
+  const [selectedLoanOutstanding, setSelectedLoanOutstanding] = useState<number>(0);
+  const [selectedLoanPhone, setSelectedLoanPhone] = useState<string>('');
 
   // Fetch loans from API
   useEffect(() => {
@@ -99,10 +106,28 @@ export default function RepayPage() {
     fetchLoans();
   }, []);
 
+  // Fetch payment history
+  useEffect(() => {
+    const fetchPaymentHistory = async () => {
+      try {
+        const response = await transactionsApi.getRecent(0, 10);
+        const history = response.items || response || [];
+        // Filter for REPAYMENT transactions only
+        const repayments = Array.isArray(history) 
+          ? history.filter((tx: any) => tx.type === 'REPAYMENT')
+          : [];
+        setPaymentHistory(repayments);
+      } catch (error) {
+        console.error('Failed to fetch payment history:', error);
+      }
+    };
+    fetchPaymentHistory();
+  }, []);
+
   // Calculate summary from real data
   const summary = {
-    totalOutstanding: loans.reduce((sum, loan) => sum + (loan.total_due || loan.current_outstanding || 0), 0),
-    nextPayment: loans.length > 0 ? loans[0].total_due : 0,
+    totalOutstanding: loans.reduce((sum, loan) => sum + (loan.outstanding_balance ?? loan.current_outstanding ?? loan.total_due ?? 0), 0),
+    nextPayment: loans.length > 0 ? (loans[0].outstanding_balance ?? loans[0].current_outstanding ?? loans[0].total_due ?? 0) : 0,
     nextDueDate: loans.length > 0 ? loans[0].due_date : null
   };
 
@@ -113,6 +138,19 @@ export default function RepayPage() {
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => {
     const { name, value } = e.target;
     setFormData(prev => ({ ...prev, [name]: value }));
+    
+    // Update outstanding balance and phone when loan is selected
+    if (name === 'loanId') {
+      const selectedLoan = loans.find((l: any) => l.loan_id === value);
+      if (selectedLoan) {
+        // Use outstanding_balance from backend (calculated from transactions)
+        setSelectedLoanOutstanding(selectedLoan.outstanding_balance ?? selectedLoan.current_outstanding ?? selectedLoan.total_due ?? 0);
+        setSelectedLoanPhone(selectedLoan.phone_number || '');
+      } else {
+        setSelectedLoanOutstanding(0);
+        setSelectedLoanPhone('');
+      }
+    }
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -132,7 +170,14 @@ export default function RepayPage() {
     const loanIdError = validateLoanId(formData.loanId);
     if (loanIdError) errors.loanId = loanIdError;
     
-    const amountError = validateAmount(formData.amount);
+    // Validate confirmed phone number matches registered phone
+    if (!formData.confirmedPhone) {
+      errors.confirmedPhone = 'Phone number is required for verification';
+    } else if (selectedLoanPhone && formData.confirmedPhone.replace(/\s/g, '') !== selectedLoanPhone.replace(/\s/g, '')) {
+      errors.confirmedPhone = 'Phone number does not match the registered number for this loan';
+    }
+    
+    const amountError = validateAmount(formData.amount, selectedLoanOutstanding < 100 ? 0.01 : 100);
     if (amountError) errors.amount = amountError;
     
     if (formData.paymentMethod === 'mpesa') {
@@ -168,7 +213,8 @@ export default function RepayPage() {
     try {
       const paymentData = {
         loan_id: selectedLoan.id,
-        amount: parseFloat(formData.amount)
+        amount: parseFloat(formData.amount),
+        phone_number: formData.confirmedPhone || formData.phoneNumber
       };
       
       const response = await transactionsApi.initiate(paymentData);
@@ -187,11 +233,12 @@ export default function RepayPage() {
       // Update local loan data to reflect new balance
       const updatedLoans = loans.map((loan: any) => {
         if (loan.id === selectedLoan.id) {
-          const newOutstanding = (loan.total_due || loan.current_outstanding || 0) - parseFloat(formData.amount);
+          const newOutstanding = (loan.outstanding_balance ?? loan.current_outstanding ?? loan.total_due ?? 0) - parseFloat(formData.amount);
           return {
             ...loan,
             total_due: Math.max(0, newOutstanding),
-            current_outstanding: Math.max(0, newOutstanding)
+            current_outstanding: Math.max(0, newOutstanding),
+            outstanding_balance: Math.max(0, newOutstanding)
           };
         }
         return loan;
@@ -199,6 +246,12 @@ export default function RepayPage() {
       setLoans(updatedLoans);
       
       setPaymentStep('success');
+      setJustPaid(true);
+      
+      // Show success message and redirect to my-loans page after short delay
+      setTimeout(() => {
+        router.push('/myloans?paymentSuccess=true');
+      }, 2000);
     } catch (error: any) {
       console.error('Payment failed:', error);
       setIsProcessing(false);
@@ -213,6 +266,7 @@ export default function RepayPage() {
   const handleReset = () => {
     setFormData({
       loanId: '',
+      confirmedPhone: '',
       amount: '',
       paymentMethod: 'mpesa',
       phoneNumber: '',
@@ -222,13 +276,24 @@ export default function RepayPage() {
     });
     setPaymentStep('form');
     setPaymentResponse(null);
+    setSelectedLoanOutstanding(0);
+    setSelectedLoanPhone('');
+    
+    // Redirect to my-loans with success flag after payment
+    if (justPaid) {
+      setJustPaid(false);
+      router.push('/myloans?paymentSuccess=true');
+    }
   };
 
-  // Check for outstanding loans
-  const hasOutstandingLoans = loans.length > 0 && loans.some((loan: any) => (loan.current_outstanding || loan.total_due || 0) > 0);
+  // Check if there are any loans with outstanding balance
+  const hasOutstandingLoans = loans.length > 0 && loans.some((loan: any) => 
+    (loan.outstanding_balance ?? loan.current_outstanding ?? loan.total_due ?? 0) > 0
+  );
 
   // Get outstanding balance for a loan
-  const getOutstandingBalance = (loan: any) => loan.current_outstanding || loan.total_due || 0;
+  const getOutstandingBalance = (loan: any) => 
+    loan.outstanding_balance ?? loan.current_outstanding ?? loan.total_due ?? 0;
 
   // Validate amount against outstanding balance
   const validateAgainstBalance = (amount: string, loanId: string): string | null => {
@@ -237,7 +302,7 @@ export default function RepayPage() {
     const outstanding = getOutstandingBalance(selectedLoan);
     const amountNum = parseFloat(amount);
     if (amountNum > outstanding) {
-      return `Amount exceeds your outstanding balance of KSh ${outstanding.toLocaleString()}`;
+      return `Amount exceeds your outstanding balance of KSh ${outstanding.toFixed(2)}`;
     }
     return null;
   };
@@ -402,7 +467,7 @@ export default function RepayPage() {
                     <option value="">Select Loan ID</option>
                     {loans.map(loan => (
                       <option key={loan.id} value={loan.loan_id}>
-                        {loan.loan_id} - {formatCurrency(loan.next_emi_amount)}
+                        {loan.loan_id} - Outstanding: KSh {(loan.outstanding_balance ?? loan.current_outstanding ?? loan.total_due ?? 0).toFixed(2)} | Phone: {maskPhoneNumber(loan.phone_number)}
                       </option>
                     ))}
                   </select>
@@ -411,27 +476,158 @@ export default function RepayPage() {
                   )}
                 </div>
 
-                {/* Amount */}
-                <div className="space-y-2">
-                  <label className="text-sm font-medium" style={{ color: 'var(--text-secondary)' }}>
-                    Amount (KSh)
-                  </label>
-                  <input
-                    type="number"
-                    name="amount"
-                    value={formData.amount}
-                    onChange={handleInputChange}
-                    placeholder="Enter amount"
-                    required
-                    className={`w-full px-4 py-3 rounded-xl border focus:outline-none focus:ring-2 focus:ring-blue-500 ${
-                      fieldErrors.amount ? 'border-red-500' : ''
-                    }`}
-                    style={{ backgroundColor: 'var(--input-bg)', borderColor: fieldErrors.amount ? '#ef4444' : 'var(--input-border)', color: 'var(--text-primary)' }}
-                  />
-                  {fieldErrors.amount && (
-                    <p className="text-xs text-red-500">{fieldErrors.amount}</p>
-                  )}
-                </div>
+                {/* Smart Amount Section - Different UI based on balance */}
+                {selectedLoanOutstanding > 0 && (
+                  <>
+                    {(selectedLoanOutstanding ?? 0) >= 100 ? (
+                      /* Normal payment: show input for amounts >= 100 */
+                      <div className="space-y-2">
+                        <label className="text-sm font-medium" style={{ color: 'var(--text-secondary)' }}>
+                          Amount (KSh)
+                        </label>
+                        <input
+                          type="number"
+                          name="amount"
+                          value={formData.amount}
+                          onChange={handleInputChange}
+                          placeholder={`Enter amount (min 100, max ${selectedLoanOutstanding.toFixed(2)})`}
+                          min={100}
+                          max={selectedLoanOutstanding || 0}
+                          step="any"
+                          required
+                          className={`w-full px-4 py-3 rounded-xl border focus:outline-none focus:ring-2 focus:ring-blue-500 ${
+                            fieldErrors.amount ? 'border-red-500' : ''
+                          }`}
+                          style={{ backgroundColor: 'var(--input-bg)', borderColor: fieldErrors.amount ? '#ef4444' : 'var(--input-border)', color: 'var(--text-primary)' }}
+                        />
+                        <p className="text-xs text-gray-500">
+                          Min: KSh 100 | Max: KSh {selectedLoanOutstanding.toFixed(2)}
+                        </p>
+                        <div className="flex justify-between items-center mt-2">
+                          <p className="text-sm text-gray-600">
+                            Exact amount: KSh {selectedLoanOutstanding.toFixed(2)}
+                          </p>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setFormData({ ...formData, amount: String(selectedLoanOutstanding) });
+                              setTimeout(() => {
+                                const input = document.querySelector('input[name="amount"]') as HTMLInputElement;
+                                if (input) input.focus();
+                              }, 50);
+                            }}
+                            className="text-sm text-blue-600 hover:underline"
+                          >
+                            Use exact amount
+                          </button>
+                        </div>
+                        {fieldErrors.amount && (
+                          <p className="text-xs text-red-500">{fieldErrors.amount}</p>
+                        )}
+                      </div>
+                    ) : (
+                      /* Small balance: show prominent exact amount button */
+                      <div className="bg-yellow-50 dark:bg-yellow-900/20 p-4 rounded-lg">
+                        <p className="text-sm text-yellow-800 dark:text-yellow-200 mb-3">
+                          ⚠️ This loan has a small remaining balance of KSh {selectedLoanOutstanding?.toFixed(2)}.
+                          This is below the minimum payment of KSh 100.
+                        </p>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            console.log('🔘 Pay Exact Amount button clicked');
+                            console.log('💰 selectedLoanOutstanding:', selectedLoanOutstanding);
+                            console.log('📦 Current formData.amount:', formData.amount);
+                            setFormData({ ...formData, amount: String(selectedLoanOutstanding) });
+                            console.log('✅ Updated formData.amount to:', String(selectedLoanOutstanding));
+                            // Focus the input after setting the value
+                            setTimeout(() => {
+                              const input = document.querySelector('input[name="amount"]') as HTMLInputElement;
+                              console.log('🎯 Input element:', input);
+                              if (input) input.focus();
+                            }, 50);
+                          }}
+                          className="w-full px-4 py-3 bg-yellow-600 text-white rounded-lg font-medium hover:bg-yellow-700 transition-colors"
+                        >
+                          Pay Exact Amount: KSh {selectedLoanOutstanding?.toFixed(2)}
+                        </button>
+                        <p className="text-xs text-gray-500 mt-2 text-center">
+                          Click the button above to settle this loan completely
+                        </p>
+                        {/* Visible amount input - users can see and verify the amount */}
+                        <div className="mt-3">
+                          <label className="text-sm font-medium" style={{ color: 'var(--text-secondary)' }}>
+                            Amount (KSh)
+                          </label>
+                          <input
+                            type="number"
+                            name="amount"
+                            value={formData.amount}
+                            onChange={handleInputChange}
+                            step="any"
+                            min={0}
+                            max={selectedLoanOutstanding || 0}
+                            required
+                            className={`w-full px-4 py-3 rounded-xl border focus:outline-none focus:ring-2 focus:ring-blue-500 ${
+                              fieldErrors.amount ? 'border-red-500' : ''
+                            }`}
+                            style={{ backgroundColor: 'var(--input-bg)', borderColor: fieldErrors.amount ? '#ef4444' : 'var(--input-border)', color: 'var(--text-primary)' }}
+                            placeholder="Enter amount"
+                          />
+                          <p className="text-xs text-gray-500 mt-1">
+                            Max: KSh {selectedLoanOutstanding?.toFixed(2)}
+                          </p>
+                        </div>
+                      </div>
+                    )}
+                  </>
+                )}
+
+                {/* Phone Number Confirmation - Show when loan is selected */}
+                {formData.loanId && (
+                  <motion.div
+                    initial={{ opacity: 0, y: 10 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    className="space-y-2 md:col-span-2"
+                  >
+                    <div className="p-3 rounded-xl bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-200 dark:border-yellow-800">
+                      <div className="flex items-start gap-2">
+                        <Shield className="h-5 w-5 text-yellow-600 dark:text-yellow-400 shrink-0 mt-0.5" />
+                        <div>
+                          <p className="text-sm font-medium" style={{ color: 'var(--text-primary)' }}>
+                            Phone Verification Required
+                          </p>
+                          <p className="text-xs mt-1" style={{ color: 'var(--text-secondary)' }}>
+                            Enter your registered phone number for this loan to verify your identity
+                          </p>
+                          {selectedLoanPhone && (
+                            <p className="text-xs mt-2 font-medium" style={{ color: 'var(--text-secondary)' }}>
+                              Registered phone: <span className="font-mono text-yellow-600 dark:text-yellow-400">{selectedLoanPhone}</span>
+                            </p>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                    <label className="text-sm font-medium" style={{ color: 'var(--text-secondary)' }}>
+                      Confirm Phone Number
+                    </label>
+                    <input
+                      type="tel"
+                      name="confirmedPhone"
+                      value={formData.confirmedPhone}
+                      onChange={handleInputChange}
+                      placeholder="Enter your registered phone number"
+                      required
+                      className={`w-full px-4 py-3 rounded-xl border focus:outline-none focus:ring-2 focus:ring-yellow-500 ${
+                        fieldErrors.confirmedPhone ? 'border-red-500' : ''
+                      }`}
+                      style={{ backgroundColor: 'var(--input-bg)', borderColor: fieldErrors.confirmedPhone ? '#ef4444' : 'var(--input-border)', color: 'var(--text-primary)' }}
+                    />
+                    {fieldErrors.confirmedPhone && (
+                      <p className="text-xs text-red-500">{fieldErrors.confirmedPhone}</p>
+                    )}
+                  </motion.div>
+                )}
 
                 {/* Payment Method */}
                 <div className="space-y-2 md:col-span-2">
@@ -568,6 +764,46 @@ export default function RepayPage() {
                 )}
               </div>
 
+                {/* Selected Loan Outstanding Balance */}
+              {formData.loanId && selectedLoanOutstanding > 0 && (
+                <motion.div
+                  initial={{ opacity: 0, y: 10 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  className="mt-4 p-4 rounded-xl bg-orange-50 dark:bg-orange-900/20 border border-orange-200 dark:border-orange-800"
+                >
+                  <div className="flex justify-between items-center">
+                    <span className="text-sm font-medium" style={{ color: 'var(--text-secondary)' }}>
+                      Outstanding Balance:
+                    </span>
+                    <span className="text-lg font-bold text-orange-600 dark:text-orange-400">
+                      {formatCurrency(selectedLoanOutstanding)}
+                    </span>
+                  </div>
+                  {/* Warning for small balances - only show when > 0 and < 100 */}
+                  {selectedLoanOutstanding > 0 && selectedLoanOutstanding < 100 && (
+                    <div className="mt-3 p-3 rounded-lg bg-yellow-100 dark:bg-yellow-900/30">
+                      <p className="text-sm text-yellow-800 dark:text-yellow-200">
+                        ⚠️ This loan has a small remaining balance of KSh {selectedLoanOutstanding.toFixed(2)}.
+                        This is below the minimum payment of KSh 100. You can pay the exact amount to settle it.
+                      </p>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setFormData({ ...formData, amount: String(selectedLoanOutstanding) });
+                          setTimeout(() => {
+                            const input = document.querySelector('input[name="amount"]') as HTMLInputElement;
+                            if (input) input.focus();
+                          }, 50);
+                        }}
+                        className="mt-2 px-4 py-2 bg-yellow-600 text-white rounded-lg text-sm hover:bg-yellow-700"
+                      >
+                        Pay Exact Amount: KSh {selectedLoanOutstanding.toFixed(2)}
+                      </button>
+                    </div>
+                  )}
+                </motion.div>
+              )}
+
               {/* Submit Button */}
               <motion.button
                 type="submit"
@@ -687,6 +923,70 @@ export default function RepayPage() {
           </motion.div>
         )}
       </AnimatePresence>
+
+      {/* Payment History Section */}
+      <motion.div
+        initial={{ opacity: 0, y: 20 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ delay: 0.5 }}
+        className="p-6 rounded-2xl border shadow-lg"
+        style={{ backgroundColor: 'var(--bg-card)', borderColor: 'var(--border-light)' }}
+      >
+        <h2 className="text-xl font-bold mb-4" style={{ color: 'var(--heading-color)' }}>
+          Recent Payments
+        </h2>
+        
+        {paymentHistory.length > 0 ? (
+          <div className="space-y-3">
+            {paymentHistory.slice(0, 5).map((payment: any, index: number) => (
+              <motion.div
+                key={payment.id || index}
+                initial={{ opacity: 0, x: -20 }}
+                animate={{ opacity: 1, x: 0 }}
+                transition={{ delay: index * 0.1 }}
+                className="flex items-center justify-between p-3 rounded-xl"
+                style={{ backgroundColor: 'var(--bg-card-alt)' }}
+              >
+                <div className="flex items-center gap-3">
+                  <div className="p-2 rounded-lg bg-green-100 dark:bg-green-900/30">
+                    <CheckCircle className="h-4 w-4 text-green-600 dark:text-green-400" />
+                  </div>
+                  <div>
+                    <p className="font-medium" style={{ color: 'var(--text-primary)' }}>
+                      {formatCurrency(payment.amount)}
+                    </p>
+                    <p className="text-xs" style={{ color: 'var(--text-secondary)' }}>
+                      {payment.initiated_at ? new Date(payment.initiated_at).toLocaleDateString('en-KE', {
+                        day: 'numeric',
+                        month: 'short',
+                        year: 'numeric'
+                      }) : 'Recently'}
+                    </p>
+                  </div>
+                </div>
+                <div className="text-right">
+                  <p className="text-sm font-medium" style={{ color: 'var(--text-secondary)' }}>
+                    Remaining
+                  </p>
+                  <p className="font-bold" style={{ color: 'var(--text-primary)' }}>
+                    {formatCurrency(payment.remaining_balance)}
+                  </p>
+                </div>
+              </motion.div>
+            ))}
+          </div>
+        ) : (
+          <div className="text-center py-8">
+            <Clock className="h-12 w-12 mx-auto mb-3" style={{ color: 'var(--text-secondary)' }} />
+            <p className="text-lg font-medium" style={{ color: 'var(--text-secondary)' }}>
+              No payment history yet
+            </p>
+            <p className="text-sm" style={{ color: 'var(--text-secondary)' }}>
+              Your recent payments will appear here
+            </p>
+          </div>
+        )}
+      </motion.div>
     </div>
   );
 }

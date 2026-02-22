@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useCallback } from 'react';
 import { motion } from 'framer-motion';
-import { useRouter } from 'next/navigation';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { 
   Wallet, 
   Calendar, 
@@ -22,7 +22,7 @@ import {
 import Link from 'next/link';
 import GlassCard from '@/components/GlassCard';
 import { loansApi } from '@/lib/api';
-import { getErrorMessage } from '@/lib/utils';
+import { getErrorMessage, maskPhoneNumber } from '@/lib/utils';
 import { useAuth, isAdmin } from '@/context/AuthContext';
 import { exportLoansToPDF } from '@/lib/pdfExport';
 
@@ -51,12 +51,14 @@ interface Loan {
   interest_rate: number;
   term_days: number;
   total_due: number;
+  outstanding_balance?: number;
   current_outstanding?: number;
+  phone_number?: string;
   due_date: string;
   payment_date?: string;
   late_days: number;
   late_penalty_amount?: number;
-  status: string;
+  status: 'PENDING' | 'ACTIVE' | 'SETTLED' | 'REJECTED' | 'DEFAULTED';
   risk_score?: number;
   risk_grade?: string;
   created_at: string;
@@ -90,6 +92,8 @@ export default function MyLoansPage() {
   const [searchQuery, setSearchQuery] = useState('');
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [isExporting, setIsExporting] = useState(false);
+  const [refreshKey, setRefreshKey] = useState(0);
+  const searchParams = useSearchParams();
   
   // Debounce search query
   const debouncedSearch = useDebounce(searchQuery, 300);
@@ -136,10 +140,10 @@ export default function MyLoansPage() {
     const activeLoans = loanData.filter((l: Loan) => l.status === 'ACTIVE');
     const settledLoans = loanData.filter((l: Loan) => l.status === 'SETTLED');
     
-    const totalOutstanding = activeLoans.reduce((sum: number, l: Loan) => sum + (l.current_outstanding || l.total_due), 0);
+    const totalOutstanding = activeLoans.reduce((sum: number, l: Loan) => sum + (l.outstanding_balance ?? l.current_outstanding ?? l.total_due), 0);
     const totalRepaid = settledLoans.reduce((sum: number, l: Loan) => sum + l.total_due, 0);
     
-    // Find next due date
+    // Find next due date - use outstanding_balance for next payment
     const nextLoan = activeLoans.sort((a: Loan, b: Loan) => 
       new Date(a.due_date).getTime() - new Date(b.due_date).getTime()
     )[0];
@@ -148,7 +152,7 @@ export default function MyLoansPage() {
       active_loans: activeLoans.length,
       total_outstanding: totalOutstanding,
       total_repaid: totalRepaid,
-      next_payment: nextLoan?.total_due || 0,
+      next_payment: nextLoan ? (nextLoan.outstanding_balance ?? nextLoan.current_outstanding ?? nextLoan.total_due) : 0,
       next_due_date: nextLoan?.due_date || '',
       perfect_repayment_streak: 1,
     });
@@ -157,13 +161,40 @@ export default function MyLoansPage() {
   // Initial load
   useEffect(() => {
     fetchLoans();
-  }, [fetchLoans]);
+    
+    // Set up polling for active loans to update outstanding balances
+    const interval = setInterval(() => {
+      fetchLoans(debouncedSearch, statusFilter);
+    }, 30000); // Refresh every 30 seconds
+    
+    return () => clearInterval(interval);
+  }, [fetchLoans, debouncedSearch, statusFilter]);
 
   // Handle search with debounce
   useEffect(() => {
     setSearching(true);
     fetchLoans(debouncedSearch, statusFilter);
   }, [debouncedSearch, statusFilter, fetchLoans]);
+
+  // Refresh when page becomes visible (e.g., user returns from payment)
+  useEffect(() => {
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible') {
+        fetchLoans(debouncedSearch, statusFilter);
+      }
+    };
+    
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    return () => document.removeEventListener('visibilitychange', handleVisibilityChange);
+  }, [fetchLoans, debouncedSearch, statusFilter]);
+
+  // Handle payment success - refresh when returning from repay page
+  useEffect(() => {
+    if (searchParams.get('paymentSuccess') === 'true') {
+      fetchLoans(debouncedSearch, statusFilter);
+      router.replace('/myloans');
+    }
+  }, [searchParams, router, fetchLoans, debouncedSearch, statusFilter]);
 
   // Handle refresh
   const handleRefresh = async () => {
@@ -222,28 +253,32 @@ export default function MyLoansPage() {
   const getStatusColor = (status: string) => {
     switch (status) {
       case 'ACTIVE':
-        return 'bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-400';
+        return 'bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400 border-green-200';
       case 'SETTLED':
-        return 'bg-emerald-100 dark:bg-emerald-900/30 text-emerald-700 dark:text-emerald-400';
+        return 'bg-gray-100 dark:bg-gray-900/30 text-gray-700 dark:text-gray-400 border-gray-200';
       case 'DEFAULTED':
-        return 'bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-400';
+        return 'bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-400 border-red-200';
+      case 'REJECTED':
+        return 'bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-400 border-red-200';
       case 'PENDING':
-        return 'bg-yellow-100 dark:bg-yellow-900/30 text-yellow-700 dark:text-yellow-400';
+        return 'bg-yellow-100 dark:bg-yellow-900/30 text-yellow-700 dark:text-yellow-400 border-yellow-200';
       default:
-        return 'bg-gray-100 dark:bg-gray-900/30 text-gray-700 dark:text-gray-400';
+        return 'bg-gray-100 dark:bg-gray-900/30 text-gray-700 dark:text-gray-400 border-gray-200';
     }
   };
 
   const getStatusIcon = (status: string) => {
     switch (status) {
       case 'ACTIVE':
-        return <Clock className="h-4 w-4" />;
+        return <Clock className="h-4 w-4 text-green-600" />;
       case 'SETTLED':
-        return <CheckCircle className="h-4 w-4" />;
+        return <CheckCircle className="h-4 w-4 text-green-600" />;
       case 'DEFAULTED':
-        return <AlertCircle className="h-4 w-4" />;
+        return <AlertCircle className="h-4 w-4 text-red-600" />;
+      case 'REJECTED':
+        return <X className="h-4 w-4 text-red-600" />;
       case 'PENDING':
-        return <Clock className="h-4 w-4" />;
+        return <Clock className="h-4 w-4 text-yellow-600" />;
       default:
         return <Wallet className="h-4 w-4" />;
     }
@@ -408,7 +443,7 @@ export default function MyLoansPage() {
               <div className="min-w-0">
                 <p className="text-xs sm:text-sm text-gray-600 dark:text-gray-400">Next Due</p>
                 <p className="text-lg sm:text-2xl font-bold text-gray-900 dark:text-white truncate">
-                  {formatCurrency(summary?.next_payment || 0)}
+                  {(summary?.active_loans ?? 0) > 0 ? formatCurrency(summary?.next_payment || 0) : '-'}
                 </p>
               </div>
             </div>
@@ -417,7 +452,7 @@ export default function MyLoansPage() {
       </div>
 
       {/* Next Payment Alert */}
-      {summary?.next_due_date && summary.active_loans > 0 && (
+      {summary?.next_due_date && (summary?.active_loans ?? 0) > 0 && (
         <GlassCard>
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
             <div className="flex items-center gap-4">
@@ -584,12 +619,21 @@ export default function MyLoansPage() {
                           </p>
                         </div>
                         <div>
-                          <p className="text-sm text-gray-600 dark:text-gray-400 mb-1">Remaining</p>
-                          <p className="text-lg font-bold text-gray-900 dark:text-white">
-                            {formatCurrency(loan.current_outstanding || loan.total_due)}
+                          <p className="text-sm text-gray-600 dark:text-gray-400 mb-1">Outstanding</p>
+                          <p className="text-lg font-bold text-orange-600 dark:text-orange-400">
+                            {formatCurrency(loan.outstanding_balance ?? loan.current_outstanding ?? loan.total_due)}
                           </p>
                         </div>
                       </div>
+
+                      {/* Phone number for active loans */}
+                      {loan.status === 'ACTIVE' && loan.phone_number && (
+                        <div className="mt-3 p-2 bg-blue-50 dark:bg-blue-900/20 rounded-lg">
+                          <p className="text-xs text-blue-700 dark:text-blue-300 flex items-center gap-1">
+                            📱 Registered phone: {maskPhoneNumber(loan.phone_number)} (use for repayment)
+                          </p>
+                        </div>
+                      )}
                     </div>
 
                     {/* Right: Dates & Action */}

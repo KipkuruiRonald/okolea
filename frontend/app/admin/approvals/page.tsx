@@ -121,6 +121,10 @@ export default function PendingApprovalsPage() {
         headers: { 'Authorization': `Bearer ${token}` },
       });
       if (res.ok) {
+        // Add a small delay to ensure database transaction completes
+        await new Promise(resolve => setTimeout(resolve, 300));
+        // Refresh the data
+        await fetchApplications();
         setApplications(prev => prev.filter(app => app.id !== appId));
         setSelectedApp(null);
         setToast({ message: 'Loan approved successfully! Borrower has been notified.', type: 'success' });
@@ -157,6 +161,10 @@ export default function PendingApprovalsPage() {
         body: JSON.stringify({ reason: rejectReason })
       });
       if (res.ok) {
+        // Add a small delay to ensure database transaction completes
+        await new Promise(resolve => setTimeout(resolve, 300));
+        // Refresh the data
+        await fetchApplications();
         setApplications(prev => prev.filter(app => app.id !== rejectingAppId));
         setSelectedApp(null);
         setShowRejectModal(false);
@@ -178,14 +186,46 @@ export default function PendingApprovalsPage() {
     setProcessingId(-1);
     try {
       const token = localStorage.getItem('access_token');
+      const successIds: number[] = [];
+      const failedItems: { loanId: number; error: string }[] = [];
+      
+      // Process loans sequentially with individual error handling
       for (const app of filteredApps) {
-        await fetch(`http://localhost:8000/api/admin/loans/${app.id}/approve`, {
-          method: 'POST',
-          headers: { 'Authorization': `Bearer ${token}` },
-        });
+        try {
+          const response = await fetch(`http://localhost:8000/api/admin/loans/${app.id}/approve`, {
+            method: 'POST',
+            headers: { 'Authorization': `Bearer ${token}` },
+          });
+          
+          if (response.ok) {
+            successIds.push(app.id);
+          } else {
+            const errorText = await response.text();
+            failedItems.push({ loanId: app.id, error: errorText });
+            console.error(`Loan ${app.id} failed:`, errorText);
+          }
+          
+          // Small delay between approvals to avoid race conditions
+          await new Promise(resolve => setTimeout(resolve, 200));
+          
+        } catch (err: any) {
+          failedItems.push({ loanId: app.id, error: err?.message || 'Unknown error' });
+          console.error(`Loan ${app.id} error:`, err);
+        }
       }
-      setApplications(prev => prev.filter(app => !filteredApps.find(f => f.id === app.id)));
-    } catch (err) {
+      
+      // Add delay to ensure database transactions complete
+      await new Promise(resolve => setTimeout(resolve, 300));
+      
+      // Refresh the data
+      await fetchApplications();
+      
+      // Show result summary
+      if (failedItems.length > 0) {
+        console.error('Failed approvals:', failedItems);
+      }
+      
+    } catch (err: any) {
       console.error('Failed to bulk approve:', err);
     } finally {
       setProcessingId(null);
